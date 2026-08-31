@@ -23,7 +23,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-title">✨ MagicTales Studio: Premium Illustrated Storybooks</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Powered by Imagen 3 & Gemini — High-detail 3D Pixar renders with composited parchment scrolls.</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Powered by Imagen 3 & Gemini — 3D Pixar renders, composited parchment scrolls, and voice narration.</div>', unsafe_allow_html=True)
 
 # --- Sidebar Controls ---
 with st.sidebar:
@@ -146,7 +146,7 @@ def generate_storybook_data(api_key, user_prompt, num_pages, age_str):
             "Every day was an adventure.",
             "Even when he was not looking for one."
           ],
-          "image_action_prompt": "3D Pixar render, sitting on rocking chair on wooden treehouse porch reading a glowing storybook next to a friendly little leaf-creature, sunny magical forest with flowers, masterpiece 8k"
+          "image_action_prompt": "Ziggy sitting on a wooden rocking chair on a treehouse porch reading a glowing magical map with a friendly little sprout-buddy, overlooking sunlit enchanted forest with smiling mushrooms"
         }}
       ],
       "coloring_prompts": [
@@ -171,8 +171,36 @@ def generate_storybook_data(api_key, user_prompt, num_pages, age_str):
     )
     return json.loads(response.text)
 
+def enhance_scene_prompt(api_key, character_desc, raw_scene_prompt):
+    """Acts as a Pixar visual director to expand basic scene ideas into rich cinematic prompts."""
+    client = genai.Client(api_key=api_key)
+    
+    enhancer_instruction = """
+    You are a Lead Lighting & Texture Artist at Pixar Animation Studios.
+    Take the character description and the scene action, then expand them into an ultra-detailed image prompt.
+    
+    MUST INCLUDE:
+    - Micro-details of character (ultra-detailed fluffy fur strands catching light, large glossy expressive eyes, fabric stitching).
+    - Rich environment details (lush magical flora, smiling cute mushrooms, glowing fairy particles, atmospheric sunbeams).
+    - Cinematography (volumetric warm lighting, shallow depth of field, 3D animated movie render, 8k resolution masterwork).
+    - Return ONLY the expanded prompt text, without quotes or introductory explanations.
+    """
+    
+    try:
+        response = client.models.generate_content(
+            model='gemini-3.6-flash',
+            contents=f"Character: {character_desc}\nScene Action: {raw_scene_prompt}",
+            config=types.GenerateContentConfig(
+                system_instruction=enhancer_instruction,
+                temperature=0.7
+            )
+        )
+        return response.text.strip()
+    except Exception:
+        return f"Pixar 3D animated movie render, {character_desc}, {raw_scene_prompt}, volumetric golden lighting, soft fur texture, 8k"
+
 def generate_imagen_artwork(api_key, prompt, character_desc, is_coloring=False):
-    """Uses Google Imagen 3 API directly for high-resolution 3D Pixar quality renders."""
+    """Generates high-fidelity artwork using Google Imagen 3 and enhanced Pixar prompts."""
     client = genai.Client(api_key=api_key)
     
     if is_coloring:
@@ -181,11 +209,8 @@ def generate_imagen_artwork(api_key, prompt, character_desc, is_coloring=False):
             f"zero shading, zero gradients, vector coloring sheet: {character_desc}, {prompt}"
         )
     else:
-        full_prompt = (
-            f"Pixar 3D animated movie render, children storybook illustration, {character_desc}, {prompt}, "
-            f"ultra detailed soft fluffy fur texture, big expressive glossy eyes, vibrant warm lighting, "
-            f"enchanted whimsical environment, 8k resolution, cinematic lighting, masterpiece"
-        )
+        cinematic_prompt = enhance_scene_prompt(api_key, character_desc, prompt)
+        full_prompt = f"Pixar 3D animated feature film render, storybook illustration, {cinematic_prompt}, masterwork 8k"
         
     for attempt in range(2):
         try:
@@ -391,14 +416,14 @@ if st.button("✨ Generate Deluxe Picture Book", type="primary"):
         pages_list = book.get("pages", [])
         char_desc = book.get("character_description", "")
         
-        # 1. Render Scene Artworks via Google Imagen 3
+        # 1. Render Scene Artworks via Google Imagen 3 with Enhanced Prompts
         raw_images = []
         progress_bar = st.progress(0)
         total_items = len(pages_list) + (2 if include_activities else 0)
         step = 0
         
         for idx, p in enumerate(pages_list):
-            with st.spinner(f"Generating Pixar-quality artwork for page {idx + 1} with Imagen 3..."):
+            with st.spinner(f"Rendering Pixar-quality scene for page {idx + 1} with Imagen 3..."):
                 img = generate_imagen_artwork(gemini_key, p.get("image_action_prompt"), char_desc)
                 raw_images.append(img)
             step += 1
