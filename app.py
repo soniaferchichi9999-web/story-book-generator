@@ -23,7 +23,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-title">✨ MagicTales Studio: Premium Illustrated Storybooks</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Powered by Imagen 3 & Gemini 2.5 — High-detail 3D Pixar renders with composited parchment scrolls.</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Powered by Imagen 3 & Gemini — High-detail 3D Pixar renders with composited parchment scrolls.</div>', unsafe_allow_html=True)
 
 # --- Sidebar Controls ---
 with st.sidebar:
@@ -56,13 +56,9 @@ def clean_pdf_text(text):
 # --- Pillow Parchment & Scroll Compositing Engine ---
 def draw_parchment_scroll(draw, x, y, w, h, text):
     """Draws an antique rolled parchment scroll with curled ends and crisp typography."""
-    # Drop shadow
     draw.rectangle([x + 4, y + 5, x + w + 4, y + h + 5], fill=(20, 15, 10, 120))
-    
-    # Main parchment body
     draw.rectangle([x, y, x + w, y + h], fill=(250, 241, 222), outline=(130, 90, 50), width=3)
     
-    # Left & Right scroll curls
     curl_w = 10
     draw.rectangle([x - curl_w, y - 3, x, y + h + 3], fill=(225, 210, 180), outline=(110, 75, 40), width=2)
     draw.line([x - curl_w, y + h // 2, x, y + h // 2], fill=(160, 130, 95), width=2)
@@ -70,7 +66,6 @@ def draw_parchment_scroll(draw, x, y, w, h, text):
     draw.rectangle([x + w, y - 3, x + w + curl_w, y + h + 3], fill=(225, 210, 180), outline=(110, 75, 40), width=2)
     draw.line([x + w, y + h // 2, x + w + curl_w, y + h // 2], fill=(160, 130, 95), width=2)
     
-    # Typography
     try:
         font = ImageFont.truetype("DejaVuSans-Bold.ttf", 28)
     except Exception:
@@ -91,17 +86,14 @@ def apply_storybook_frame(image, snippets):
     draw = ImageDraw.Draw(overlay)
     W, H = img.size
     
-    # Ornate double border
     margin = 25
     draw.rectangle([margin, margin, W - margin, H - margin], outline=(190, 145, 75, 255), width=5)
     draw.rectangle([margin + 7, margin + 7, W - margin - 7, H - margin - 7], outline=(120, 85, 40, 255), width=2)
     
-    # Corner filigrees
     cs = 32
     for cx, cy in [(margin, margin), (W - margin, margin), (margin, H - margin), (W - margin, H - margin)]:
         draw.arc([cx - cs, cy - cs, cx + cs, cy + cs], 0, 360, fill=(212, 175, 55, 255), width=4)
         
-    # Scroll layout: Top-Left, Middle-Right, Bottom-Right
     positions = [
         (55, 55, 420, 85),
         (W - 460, H // 2 - 45, 400, 85),
@@ -154,7 +146,7 @@ def generate_storybook_data(api_key, user_prompt, num_pages, age_str):
             "Every day was an adventure.",
             "Even when he was not looking for one."
           ],
-          "image_action_prompt": "3D Pixar render, {user_prompt}, sitting on rocking chair on wooden treehouse porch reading a glowing storybook next to a friendly little leaf-creature, sunny magical forest with flowers, masterpiece 8k"
+          "image_action_prompt": "3D Pixar render, sitting on rocking chair on wooden treehouse porch reading a glowing storybook next to a friendly little leaf-creature, sunny magical forest with flowers, masterpiece 8k"
         }}
       ],
       "coloring_prompts": [
@@ -169,7 +161,7 @@ def generate_storybook_data(api_key, user_prompt, num_pages, age_str):
     }}
     """
     
- response = client.models.generate_content(
+    response = client.models.generate_content(
         model='gemini-3.6-flash',
         contents=f"Story Concept: {user_prompt}",
         config=types.GenerateContentConfig(
@@ -211,7 +203,6 @@ def generate_imagen_artwork(api_key, prompt, character_desc, is_coloring=False):
         except Exception:
             time.sleep(2)
             
-    # Reliable fallback if rate-limited
     fb = Image.new('RGB', (1024, 1024), color=(240, 235, 220))
     draw = ImageDraw.Draw(fb)
     draw.rectangle([20, 20, 1004, 1004], outline=(190, 150, 90), width=5)
