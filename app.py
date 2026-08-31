@@ -75,15 +75,36 @@ def generate_story(api_key, user_prompt, style, num_pages):
     )
     return json.loads(response.text)
 
-def fetch_image(prompt, style, character_desc):
-    full_prompt = f"{style}, {character_desc}, {prompt}, masterpiece, clean scene, 8k"
+import time
+from PIL import ImageDraw
+
+def create_fallback_image(text="Image generation timed out"):
+    """Creates a blank placeholder image so the PDF generation never fails."""
+    img = Image.new('RGB', (800, 800), color=(245, 245, 245))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([20, 20, 780, 780], outline=(200, 200, 200), width=3)
+    draw.text((300, 390), text, fill=(120, 120, 120))
+    return img
+
+def fetch_image(prompt, style, character_desc, is_coloring=False):
+    if is_coloring:
+        full_prompt = f"black and white coloring book page, clean bold outlines, line art, white background, no shading, {character_desc}, {prompt}"
+    else:
+        full_prompt = f"{style}, {character_desc}, {prompt}, 8k"
+        
     encoded_prompt = urllib.parse.quote(full_prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=800&height=800&nologo=true"
+    # Using model=turbo & 512x512 resolution for much faster, reliable generation
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=512&height=512&nologo=true&model=turbo"
     
-    res = requests.get(url, timeout=45)
-    if res.status_code == 200:
-        return Image.open(io.BytesIO(res.content))
-    return None
+    for attempt in range(3):
+        try:
+            res = requests.get(url, timeout=60)
+            if res.status_code == 200 and len(res.content) > 1000:
+                return Image.open(io.BytesIO(res.content))
+        except (requests.exceptions.RequestException, Exception):
+            time.sleep(2)
+            
+    return create_fallback_image("Scene rendering took too long")
 
 def build_pdf(book_data, image_list):
     pdf = StoryPDF(orientation='P', unit='mm', format='A4')
