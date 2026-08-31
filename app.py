@@ -10,6 +10,8 @@ import os
 import time
 import random
 import string
+import urllib.parse
+import requests
 import asyncio
 import edge_tts
 
@@ -23,7 +25,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-title">✨ MagicTales Studio: Premium Illustrated Storybooks</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Powered by Imagen 3 & Gemini — 3D Pixar renders, composited parchment scrolls, and voice narration.</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Dual-Engine (Imagen 3 + FLUX.1) — High-detail 3D Pixar renders with composited parchment scrolls.</div>', unsafe_allow_html=True)
 
 # --- Sidebar Controls ---
 with st.sidebar:
@@ -31,15 +33,9 @@ with st.sidebar:
     gemini_key = st.text_input("Gemini API Key", type="password")
     st.markdown("[Get a Gemini API Key](https://aistudio.google.com/)")
     
-    age_group = st.selectbox("Target Age Group", ["Ages 3-5", "Ages 5-8", "Ages 8-12"], index=1)
-    pages_count = st.slider("Story Pages", min_value=3, max_value=8, value=4)
+    mode = st.radio("Workflow Mode", ["🪄 Auto-Generate from Concept", "✍️ Director's Studio (Full Control)"])
     enable_audio = st.checkbox("Generate Bedtime Voice Narration", value=True)
     include_activities = st.checkbox("Include Coloring & Games Pages", value=True)
-
-story_prompt = st.text_area(
-    "What magical story shall we create?",
-    value="Ziggy Zappop the curious turquoise-blue bunny creature with big fluffy ears wearing a leather backpack and sneakers. Ziggy sits on his wooden treehouse porch reading a glowing magical map with a little sprout-buddy, looking over the Whispering Forest full of smiley mushrooms and magical glowing lights."
-)
 
 def clean_pdf_text(text):
     if not text:
@@ -53,9 +49,8 @@ def clean_pdf_text(text):
         text = text.replace(old, new)
     return text.encode('latin-1', 'ignore').decode('latin-1')
 
-# --- Pillow Parchment & Scroll Compositing Engine ---
+# --- Pillow Compositing Engine (Scrolls & Borders) ---
 def draw_parchment_scroll(draw, x, y, w, h, text):
-    """Draws an antique rolled parchment scroll with curled ends and crisp typography."""
     draw.rectangle([x + 4, y + 5, x + w + 4, y + h + 5], fill=(20, 15, 10, 120))
     draw.rectangle([x, y, x + w, y + h], fill=(250, 241, 222), outline=(130, 90, 50), width=3)
     
@@ -67,7 +62,7 @@ def draw_parchment_scroll(draw, x, y, w, h, text):
     draw.line([x + w, y + h // 2, x + w + curl_w, y + h // 2], fill=(160, 130, 95), width=2)
     
     try:
-        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 28)
+        font = ImageFont.truetype("DejaVuSans-Bold.ttf", 26)
     except Exception:
         font = ImageFont.load_default()
         
@@ -80,7 +75,6 @@ def draw_parchment_scroll(draw, x, y, w, h, text):
     draw.text((text_x, text_y), text, fill=(35, 25, 20), font=font)
 
 def apply_storybook_frame(image, snippets):
-    """Applies vintage border and composited parchment scrolls over full-bleed artwork."""
     img = image.convert("RGBA").resize((1024, 1024))
     overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
@@ -119,17 +113,13 @@ async def generate_narration_audio(text, output_path):
 
 def generate_storybook_data(api_key, user_prompt, num_pages, age_str):
     client = genai.Client(api_key=api_key)
-    
     system_instruction = f"""
     You are an award-winning children's author and visual director for high-end Disney/Pixar storybooks.
     Create a magical story based on the prompt in EXACTLY {num_pages} pages for {age_str}.
     
-    CRITICAL TEXT RULES:
-    Break every page into 2 or 3 short, whimsical story snippets (5 to 8 words each) that will be placed inside parchment scrolls on the page.
-    Example:
-    - Snippet 1: "Ziggy lived beside the Whispering Forest."
-    - Snippet 2: "Every day was an adventure."
-    - Snippet 3: "Even when he was not looking for one."
+    CRITICAL RULES:
+    1. Break every page into 2 or 3 short story snippets (5 to 8 words each) to fit inside parchment scrolls.
+    2. Write an ultra-detailed 'image_action_prompt' for each page describing character pose, background, lighting, and camera angle.
     
     Return STRICT JSON:
     {{
@@ -171,49 +161,28 @@ def generate_storybook_data(api_key, user_prompt, num_pages, age_str):
     )
     return json.loads(response.text)
 
-def enhance_scene_prompt(api_key, character_desc, raw_scene_prompt):
-    """Acts as a Pixar visual director to expand basic scene ideas into rich cinematic prompts."""
-    client = genai.Client(api_key=api_key)
-    
-    enhancer_instruction = """
-    You are a Lead Lighting & Texture Artist at Pixar Animation Studios.
-    Take the character description and the scene action, then expand them into an ultra-detailed image prompt.
-    
-    MUST INCLUDE:
-    - Micro-details of character (ultra-detailed fluffy fur strands catching light, large glossy expressive eyes, fabric stitching).
-    - Rich environment details (lush magical flora, smiling cute mushrooms, glowing fairy particles, atmospheric sunbeams).
-    - Cinematography (volumetric warm lighting, shallow depth of field, 3D animated movie render, 8k resolution masterwork).
-    - Return ONLY the expanded prompt text, without quotes or introductory explanations.
+def generate_high_quality_image(api_key, prompt, character_desc, seed, is_coloring=False):
     """
-    
-    try:
-        response = client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=f"Character: {character_desc}\nScene Action: {raw_scene_prompt}",
-            config=types.GenerateContentConfig(
-                system_instruction=enhancer_instruction,
-                temperature=0.7
-            )
-        )
-        return response.text.strip()
-    except Exception:
-        return f"Pixar 3D animated movie render, {character_desc}, {raw_scene_prompt}, volumetric golden lighting, soft fur texture, 8k"
-
-def generate_imagen_artwork(api_key, prompt, character_desc, is_coloring=False):
-    """Generates high-fidelity artwork using Google Imagen 3 and enhanced Pixar prompts."""
-    client = genai.Client(api_key=api_key)
-    
+    Dual-Engine Image Generator:
+    1. Tries Google Imagen 3.
+    2. Falls back seamlessly to FLUX.1 Engine with zero blank frames.
+    """
     if is_coloring:
         full_prompt = (
             f"Children coloring book page, clean bold crisp black line art, pure white background, "
             f"zero shading, zero gradients, vector coloring sheet: {character_desc}, {prompt}"
         )
     else:
-        cinematic_prompt = enhance_scene_prompt(api_key, character_desc, prompt)
-        full_prompt = f"Pixar 3D animated feature film render, storybook illustration, {cinematic_prompt}, masterwork 8k"
-        
-    for attempt in range(2):
+        full_prompt = (
+            f"Pixar 3D animated feature film render, storybook illustration masterpiece, {character_desc}, {prompt}, "
+            f"ultra detailed soft fluffy fur texture, big glossy expressive eyes, volumetric golden lighting, "
+            f"enchanted whimsical environment, 8k resolution, cinematic composition"
+        )
+
+    # --- Attempt 1: Google Imagen 3 ---
+    if api_key:
         try:
+            client = genai.Client(api_key=api_key)
             result = client.models.generate_images(
                 model='imagen-3.0-generate-002',
                 prompt=full_prompt,
@@ -226,12 +195,30 @@ def generate_imagen_artwork(api_key, prompt, character_desc, is_coloring=False):
             image_bytes = result.generated_images[0].image.image_bytes
             return Image.open(io.BytesIO(image_bytes))
         except Exception:
+            pass  # Fall through to Tier 2 (FLUX.1 Engine)
+
+    # --- Attempt 2: FLUX.1 High-Fidelity Engine ---
+    encoded_prompt = urllib.parse.quote(full_prompt)
+    flux_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&seed={seed}&model=flux&nologo=true"
+    
+    for attempt in range(3):
+        try:
+            res = requests.get(flux_url, timeout=45)
+            if res.status_code == 200 and len(res.content) > 3000:
+                return Image.open(io.BytesIO(res.content))
+        except Exception:
             time.sleep(2)
-            
-    fb = Image.new('RGB', (1024, 1024), color=(240, 235, 220))
-    draw = ImageDraw.Draw(fb)
-    draw.rectangle([20, 20, 1004, 1004], outline=(190, 150, 90), width=5)
-    return fb
+
+    # --- Attempt 3: Turbo Engine Backup ---
+    turbo_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1024&height=1024&seed={seed}&model=turbo&nologo=true"
+    try:
+        res = requests.get(turbo_url, timeout=30)
+        if res.status_code == 200 and len(res.content) > 3000:
+            return Image.open(io.BytesIO(res.content))
+    except Exception:
+        pass
+
+    raise RuntimeError(f"Could not render scene: {prompt}")
 
 def generate_word_search_grid(words, size=8):
     grid = [[' ' for _ in range(size)] for _ in range(size)]
@@ -276,7 +263,7 @@ def build_pdf(book_data, framed_story_images, coloring_images, include_acts):
     subtitle = clean_pdf_text(book_data.get("subtitle", "Book 0 | Introduction Story"))
     author = clean_pdf_text(book_data.get("author_tag", "By Little Dreamers"))
     
-    # 1. Full-Bleed Cover Page
+    # 1. Cover
     pdf.add_page()
     if framed_story_images:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
@@ -305,7 +292,7 @@ def build_pdf(book_data, framed_story_images, coloring_images, include_acts):
     pdf.set_text_color(60, 45, 35)
     pdf.cell(180, 8, author, align='C')
 
-    # 2. Story Pages (Full-Bleed with Composited Scrolls)
+    # 2. Story Pages
     for img in framed_story_images:
         pdf.add_page()
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
@@ -332,7 +319,7 @@ def build_pdf(book_data, framed_story_images, coloring_images, include_acts):
             pdf.image(c_path, x=15, y=22, w=180, h=175)
             os.remove(c_path)
 
-    # 4. Activity Pages
+    # 4. Activities
     if include_acts:
         pdf.add_page()
         pdf.set_fill_color(252, 250, 245)
@@ -397,37 +384,111 @@ def build_pdf(book_data, framed_story_images, coloring_images, include_acts):
 
     return bytes(pdf.output())
 
-# --- Application Execution ---
-if st.button("✨ Generate Deluxe Picture Book", type="primary"):
+# --- User Interface ---
+if mode == "🪄 Auto-Generate from Concept":
+    user_story_idea = st.text_area(
+        "Story Concept",
+        value="Ziggy Zappop the curious turquoise-blue bunny creature with big fluffy ears wearing a leather backpack and sneakers. Ziggy sets off from his treehouse into the sunlit Whispering Forest and finds a magical glowing door inside a giant mushroom."
+    )
+    pages_count = st.slider("Story Pages", min_value=3, max_value=8, value=4)
+else:
+    st.info("✍️ **Director Mode:** Customize every page's exact prompt and scroll text below:")
+    default_json = {
+      "title": "ZIGGY ZAPPOP and the Mystery Backpack",
+      "subtitle": "Book 0 | Introduction Story Ages 5-8",
+      "author_tag": "By Little Dreamers",
+      "character_description": "A fluffy vibrant turquoise-blue bunny creature with giant upright ears, expressive big eyes, wearing a brown leather backpack with colorful gems and orange sneakers",
+      "pages": [
+        {
+          "page_number": 1,
+          "full_text_narration": "Ziggy lived beside the Whispering Forest. Every day was an adventure, even when he wasn't looking for one.",
+          "snippets": [
+            "Ziggy lived beside the Whispering Forest.",
+            "Every day was an adventure.",
+            "Even when he was not looking for one."
+          ],
+          "image_action_prompt": "Ziggy sitting on a wooden rocking chair on a treehouse porch reading an open glowing storybook next to a tiny living sprout-creature, sunny magical forest with purple irises and smiling mushrooms"
+        },
+        {
+          "page_number": 2,
+          "full_text_narration": "He followed a trail of floating golden butterflies down the mossy root bridge into the heart of the woods.",
+          "snippets": [
+            "He followed the golden butterflies.",
+            "Across the ancient root bridge.",
+            "Into the glowing emerald woods."
+          ],
+          "image_action_prompt": "Ziggy walking joyfully across a giant mossy tree-root bridge over a sparkling blue creek, following glowing golden butterflies, surrounded by giant colorful mushrooms"
+        },
+        {
+          "page_number": 3,
+          "full_text_narration": "Behind a giant smiling violet mushroom, Ziggy discovered a tiny wooden door glowing with soft celestial light.",
+          "snippets": [
+            "Behind the great violet mushroom.",
+            "A tiny carved door appeared.",
+            "Glowing with soft star magic."
+          ],
+          "image_action_prompt": "Ziggy kneeling down in wonder in front of a giant purple smiling mushroom with an intricately carved tiny glowing wooden door, magical sparks in the air"
+        },
+        {
+          "page_number": 4,
+          "full_text_narration": "With a gentle turn of the acorn knob, a shower of rainbow sparkles welcomed Ziggy to the Enchanted Kingdom.",
+          "snippets": [
+            "He turned the little acorn knob.",
+            "Rainbow light filled the forest.",
+            "The great quest had just begun!"
+          ],
+          "image_action_prompt": "Ziggy opening the tiny wooden door with a bright beam of warm rainbow light bursting out, floating stars and magical bubbles filling the vibrant mossy clearing, Ziggy cheering in pure delight"
+        }
+      ],
+      "coloring_prompts": [
+        "Ziggy happily running across a mushroom bridge with his backpack",
+        "Ziggy looking at the tiny carved door on the giant mushroom"
+      ],
+      "trivia": [
+        {"question": "Where does Ziggy live?", "options": ["Beside Whispering Forest", "On Cloud Mountain", "Under the sea"], "answer": "Beside Whispering Forest"},
+        {"question": "What did Ziggy follow across the bridge?", "options": ["Golden butterflies", "A blue bird", "A red ball"], "answer": "Golden butterflies"}
+      ],
+      "word_search_words": ["ZIGGY", "FOREST", "MAGIC", "BRIDGE", "DOOR"]
+    }
+    director_json_str = st.text_area("Story Script (JSON)", value=json.dumps(default_json, indent=2), height=350)
+
+# --- Generation Execution ---
+if st.button("🚀 Render Book & Illustrations", type="primary"):
     if not gemini_key:
         st.error("Please enter your Gemini API Key in the sidebar.")
-    elif not story_prompt.strip():
-        st.error("Please describe your story idea.")
     else:
-        with st.spinner(f"Writing {pages_count}-page picture book with scroll storytelling..."):
+        if mode == "🪄 Auto-Generate from Concept":
+            with st.spinner("Directing story structure and per-page image prompts..."):
+                try:
+                    book = generate_storybook_data(gemini_key, user_story_idea, pages_count, "Ages 5-8")
+                except Exception as e:
+                    st.error(f"Error creating story structure: {e}")
+                    st.stop()
+        else:
             try:
-                book = generate_storybook_data(gemini_key, story_prompt, pages_count, age_group)
+                book = json.loads(director_json_str)
             except Exception as e:
-                st.error(f"Error creating story: {e}")
+                st.error(f"Invalid JSON in Director's script: {e}")
                 st.stop()
 
-        st.success(f"✨ Created: **{book.get('title')}**")
+        st.success(f"✨ Rendering: **{book.get('title')}** ({len(book.get('pages', []))} Pages)")
         
         pages_list = book.get("pages", [])
         char_desc = book.get("character_description", "")
+        shared_seed = random.randint(100000, 999999)
         
-        # 1. Render Scene Artworks via Google Imagen 3 with Enhanced Prompts
+        # 1. Render Scene Artworks
         raw_images = []
         progress_bar = st.progress(0)
-        total_items = len(pages_list) + (2 if include_activities else 0)
+        total_steps = len(pages_list) + (2 if include_activities else 0)
         step = 0
         
         for idx, p in enumerate(pages_list):
-            with st.spinner(f"Rendering Pixar-quality scene for page {idx + 1} with Imagen 3..."):
-                img = generate_imagen_artwork(gemini_key, p.get("image_action_prompt"), char_desc)
+            with st.spinner(f"Rendering Page {idx + 1} with FLUX.1/Imagen Engine..."):
+                img = generate_high_quality_image(gemini_key, p.get("image_action_prompt"), char_desc, shared_seed)
                 raw_images.append(img)
             step += 1
-            progress_bar.progress(step / total_items)
+            progress_bar.progress(step / total_steps)
 
         # 2. Composite Scrolls & Borders
         framed_images = []
@@ -435,27 +496,27 @@ if st.button("✨ Generate Deluxe Picture Book", type="primary"):
             framed = apply_storybook_frame(raw_images[idx], p.get("snippets", []))
             framed_images.append(framed)
 
-        # 3. Render Coloring Sheets
+        # 3. Coloring Sheets
         coloring_images = []
         if include_activities:
             for idx, c_prompt in enumerate(book.get("coloring_prompts", [])[:2]):
                 with st.spinner(f"Generating line-art coloring page {idx + 1}..."):
-                    c_img = generate_imagen_artwork(gemini_key, c_prompt, char_desc, is_coloring=True)
+                    c_img = generate_high_quality_image(gemini_key, c_prompt, char_desc, shared_seed, is_coloring=True)
                     coloring_images.append(c_img)
                 step += 1
-                progress_bar.progress(step / total_items)
+                progress_bar.progress(step / total_steps)
 
-        # 4. Generate Voice Audio
+        # 4. Voice Narration
         audio_files = []
         if enable_audio:
-            with st.spinner("Recording neural bedtime story narration..."):
+            with st.spinner("Recording voice narration with Edge-TTS..."):
                 for idx, p in enumerate(pages_list):
                     tmp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
                     asyncio.run(generate_narration_audio(p.get("full_text_narration", ""), tmp_audio.name))
                     audio_files.append(tmp_audio.name)
 
         # 5. Live Showcase
-        tab1, tab2, tab3 = st.tabs(["📖 Illustrated Book", "🖍️ Coloring Sheets", "🎮 Activities"])
+        tab1, tab2, tab3 = st.tabs(["📖 Storybook Preview", "🖍️ Coloring Sheets", "🎮 Activities"])
         
         with tab1:
             for idx, framed_img in enumerate(framed_images):
@@ -485,7 +546,7 @@ if st.button("✨ Generate Deluxe Picture Book", type="primary"):
                         st.write("Options:", ", ".join(q.get("options", [])))
 
         # 6. Build PDF
-        with st.spinner("Compiling square picture book PDF..."):
+        with st.spinner("Compiling square storybook PDF..."):
             pdf_bytes = build_pdf(book, framed_images, coloring_images, include_activities)
             
         st.download_button(
