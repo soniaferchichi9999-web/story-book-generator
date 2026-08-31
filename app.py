@@ -169,8 +169,8 @@ def generate_storybook_data(api_key, user_prompt, num_pages, age_str):
     }}
     """
     
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
+ response = client.models.generate_content(
+        model='gemini-3.6-flash',
         contents=f"Story Concept: {user_prompt}",
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
