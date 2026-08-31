@@ -151,15 +151,34 @@ def generate_storybook_data(api_key, user_prompt, num_pages, age_str):
     }}
     """
     
-    response = client.models.generate_content(
-        model='gemini-3.6-flash',
-        contents=f"Story Concept: {user_prompt}",
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            response_mime_type="application/json"
-        )
-    )
-    return json.loads(response.text)
+    # Candidate models with retry backoff to survive 503 spikes
+    candidate_models = [
+        'gemini-3.6-flash',
+        'gemini-3.1-pro-preview',
+        'gemini-2.5-flash',
+        'gemini-2.0-flash'
+    ]
+    
+    last_error = None
+    for model_name in candidate_models:
+        for attempt in range(3):  # Retry up to 3 times per model
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=f"Story Concept: {user_prompt}",
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        response_mime_type="application/json"
+                    )
+                )
+                return json.loads(response.text)
+            except Exception as e:
+                last_error = e
+                # Wait longer on 503 high demand before retrying
+                time.sleep(2 * (attempt + 1))
+                continue
+                
+    raise last_error
 
 def generate_high_quality_image(api_key, prompt, character_desc, seed, is_coloring=False):
     """
@@ -195,7 +214,7 @@ def generate_high_quality_image(api_key, prompt, character_desc, seed, is_colori
             image_bytes = result.generated_images[0].image.image_bytes
             return Image.open(io.BytesIO(image_bytes))
         except Exception:
-            pass  # Fall through to Tier 2 (FLUX.1 Engine)
+            pass
 
     # --- Attempt 2: FLUX.1 High-Fidelity Engine ---
     encoded_prompt = urllib.parse.quote(full_prompt)
@@ -405,7 +424,7 @@ else:
           "snippets": [
             "Ziggy lived beside the Whispering Forest.",
             "Every day was an adventure.",
-            "Even when he was not looking for one."
+            "Even when he wasn't looking for one."
           ],
           "image_action_prompt": "Ziggy sitting on a wooden rocking chair on a treehouse porch reading an open glowing storybook next to a tiny living sprout-creature, sunny magical forest with purple irises and smiling mushrooms"
         },
