@@ -4,7 +4,7 @@ from google.genai import types
 from fpdf import FPDF
 import requests
 import urllib.parse
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 import io
 import json
 import tempfile
@@ -12,96 +12,120 @@ import os
 import time
 import random
 import string
+import re
+import asyncio
+import edge_tts
 from concurrent.futures import ThreadPoolExecutor
 
-st.set_page_config(page_title="MagicTales — Storybook Creator", layout="wide", page_icon="✨")
+st.set_page_config(page_title="MagicTales Deluxe — Picture Book Studio", layout="wide", page_icon="📚")
 
 st.markdown("""
 <style>
-    .main-header { font-family: 'Georgia', serif; font-size: 2.3rem; font-weight: 700; color: #3A2E39; }
-    .sub-text { font-size: 1.1rem; color: #6E6259; margin-bottom: 20px; }
+    .main-title { font-family: 'Georgia', serif; font-size: 2.2rem; font-weight: 700; color: #2C221E; }
+    .sub-title { font-size: 1.05rem; color: #6E5D53; margin-bottom: 25px; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="main-header">✨ MagicTales Studio: Premium Illustrated Storybooks</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-text">Create full-bleed fairy tale picture books with dynamic character action, real coloring pages, and printable games.</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">📚 MagicTales Deluxe: Publishing-Grade Storybooks</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-title">Landscape two-page spreads, neural voice narration, seed-locked consistency, and activity suites.</div>', unsafe_allow_html=True)
 
 # --- Sidebar Controls ---
 with st.sidebar:
-    st.header("🪄 Story Workshop")
+    st.header("🪄 Production Settings")
     gemini_key = st.text_input("Gemini API Key", type="password")
     st.markdown("[Get a free Gemini API Key](https://aistudio.google.com/)")
     
     art_style = st.selectbox(
-        "Visual Atmosphere",
+        "Illustration Aesthetic",
         [
-            "Lush Enchanted Fairy Tale, cinematic lighting, 8k Pixar style render, magical glow",
-            "Whimsical Dreamy Watercolor & Gouache, gold leaf details, storybook masterpiece",
-            "Studio Ghibli aesthetic, vibrant hand-painted anime landscape, soft sunlight",
-            "Classic 3D Claymation & Miniature Diorama, tactile warmth, soft focus"
+            "Enchanted fairy tale landscape, cinematic lighting, 8k Pixar 3D render, golden hour atmosphere",
+            "Whimsical gouache & dreamy watercolor illustration, storybook masterpiece, rich textures",
+            "Studio Ghibli aesthetic, vibrant lush background, soft volumetric sunlight",
+            "Classic vintage bedtime storybook art, tactile pastel textures"
         ]
     )
-    pages_count = st.slider("Story Pages", min_value=4, max_value=20, value=6)
+    pages_count = st.slider("Story Pages (Spreads)", min_value=4, max_value=20, value=6)
+    enable_audio = st.checkbox("Generate Neural Voice Narration", value=True)
     include_activities = st.checkbox("Include Coloring & Games Suite", value=True)
 
 story_prompt = st.text_area(
-    "What magical adventure shall we tell?",
-    placeholder="e.g., A tiny hedgehog named Bramble who wears an oversized acorn helmet and wants to catch a falling star to light up the dark Whispering Hollow."
+    "What adventure shall we create?",
+    placeholder="e.g., A brave little sea-otter named Barnaby who wears a seaweed vest and carries a glowing pearl lantern across the coral canyons."
 )
 
-# --- PDF Builder Engine ---
-class FairyTalePDF(FPDF):
+def clean_pdf_text(text):
+    """Sanitizes text for FPDF by stripping emojis and converting fancy Unicode punctuation to Latin-1."""
+    if not text:
+        return ""
+    # Map common smart/fancy characters to standard ASCII
+    replacements = {
+        '—': '-', '–': '-', '―': '-',
+        '“': '"', '”': '"', '‘': "'", '’': "'",
+        '…': '...', '•': '*', '·': '*',
+        '«': '"', '»': '"'
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    # Remove emoji and other characters outside Latin-1
+    return text.encode('latin-1', 'ignore').decode('latin-1')
+
+# --- PDF Builder Engine (Landscape 2-Page Spreads) ---
+class LandscapeStorybookPDF(FPDF):
     def footer(self):
-        # Decorative page numbering on pages after cover
         if self.page_no() > 1:
             self.set_y(-12)
             self.set_font("Helvetica", "I", 9)
             self.set_text_color(160, 150, 140)
-            self.cell(0, 10, f"~ {self.page_no()} ~", 0, 0, "C")
+            self.cell(0, 10, f"- {self.page_no()} -", 0, 0, "C")
 
 def create_fallback_image(text="Magical Scene Loading..."):
-    img = Image.new('RGB', (800, 1000), color=(240, 235, 225))
+    img = Image.new('RGB', (1000, 750), color=(245, 240, 230))
     draw = ImageDraw.Draw(img)
-    draw.rectangle([15, 15, 785, 985], outline=(200, 180, 160), width=4)
-    draw.text((260, 480), text, fill=(130, 110, 95))
+    draw.rectangle([15, 15, 985, 735], outline=(210, 190, 170), width=4)
+    draw.text((380, 360), text, fill=(140, 120, 100))
     return img
+
+async def generate_narration_audio(text, output_path):
+    """Generates expressive neural bedtime story narration using Edge-TTS."""
+    communicate = edge_tts.Communicate(text, voice="en-US-AnaNeural", rate="-4%", pitch="+2Hz")
+    await communicate.save(output_path)
 
 def generate_full_tale(api_key, user_prompt, num_pages):
     client = genai.Client(api_key=api_key)
     
     system_instruction = f"""
-    You are an award-winning children's author and visual storyboard artist for Disney & Pixar.
-    Write a vibrant, heartwarming, magical fairy tale based on the user's idea in EXACTLY {num_pages} pages.
+    You are an award-winning children's author and visual storyboard director.
+    Write an engaging, heartwarming story based on the prompt paced across EXACTLY {num_pages} spreads.
     
-    CRITICAL STORYBOARDING RULES:
-    1. PROTAGONIST DESIGN: Give the character a clear, distinct visual trait (e.g., 'a fluffy caramel-colored red panda wearing a turquoise knitted poncho and carrying a wooden star-lantern').
-    2. DYNAMIC ACTION IN EVERY SCENE: The character MUST NEVER just stand there. They must be actively running, climbing, reaching, gasping, gliding, laughing, or interacting with the scene.
-    3. SCENARIO PROGRESSION: Make the environment evolve across every page (e.g., misty glen -> starry canopy -> crystal cavern -> moonlit lake).
-    4. COLORING PROMPTS: Generate 2 scene descriptions with strong outlines, fun objects, and clear subjects for kids to color.
-    5. COMPREHENSION TRIVIA: 2 fun multiple-choice questions about key events.
-    6. WORD SEARCH: 6 distinct uppercase story keywords (4-7 letters each).
+    PUBLISHING RULES:
+    1. PROTAGONIST DESIGN: Give the hero distinctive, persistent visual markers (exact clothing, accessories, colors, and species).
+    2. SENSORY PACING & ONOMATOPOEIA: Use rich sensory cues and playful sound words (e.g., 'Whoosh!', 'Plip-plop!').
+    3. DYNAMIC SCENE ACTIONS: The character must be actively interacting with their environment in every scene.
+    4. INTERACTIVE LOOK-AND-FIND: Provide a 'seek_and_find' prompt for each spread (e.g., 'Can you spot the 3 glowing blue shells?').
+    5. COLORING & ACTIVITIES: 2 line-art coloring prompts, 2 comprehension questions, and 6 uppercase story words.
     
     Return a STRICT JSON object:
     {{
-      "title": "Magical Story Title",
-      "tagline": "A Whimsical Tale of Wonder and Courage",
-      "character_description": "Detailed persistent visual description of protagonist",
+      "title": "Book Title",
+      "tagline": "A Heartwarming Tale of Wonder",
+      "character_description": "Detailed persistent visual traits of protagonist",
       "pages": [
         {{
-          "page_number": 1,
-          "story_text": "Story text for this page (30-45 words). Written with rhythm, emotion, and kid-friendly wonder.",
-          "action_image_prompt": "Specific visual action showing the protagonist in motion within the scene"
+          "spread_number": 1,
+          "story_text": "Engaging narrative paragraph for this spread (40-60 words).",
+          "seek_and_find": "Observation prompt for kids reading along.",
+          "action_image_prompt": "Dynamic visual scene showing protagonist in motion within the environment"
         }}
       ],
       "coloring_prompts": [
-        "Line art scene 1 of character performing a fun action",
-        "Line art scene 2 with cute secondary characters and flora"
+        "Crisp line-art scene of hero performing an action",
+        "Crisp line-art scene with cute secondary characters"
       ],
       "trivia": [
-        {{"question": "Fun story question?", "options": ["Choice A", "Choice B", "Choice C"], "answer": "Choice A"}},
-        {{"question": "Second story question?", "options": ["Choice A", "Choice B", "Choice C"], "answer": "Choice B"}}
+        {{"question": "Question about the story?", "options": ["Choice A", "Choice B", "Choice C"], "answer": "Choice A"}},
+        {{"question": "Second question about the story?", "options": ["Choice A", "Choice B", "Choice C"], "answer": "Choice B"}}
       ],
-      "word_search_words": ["STAR", "GLOW", "MAGIC", "BRAVE", "FOREST", "RIVER"]
+      "word_search_words": ["MAGIC", "BRAVE", "GLOW", "PEARL", "RIVER", "TRAIL"]
     }}
     """
     
@@ -126,20 +150,20 @@ def generate_full_tale(api_key, user_prompt, num_pages):
                 
     raise last_error
 
-def fetch_image(prompt, style, character_desc, is_coloring=False):
+def fetch_image(prompt, style, character_desc, seed, is_coloring=False):
     if is_coloring:
         full_prompt = (
             f"Children coloring book page, crisp bold black outlines, pure white background, "
-            f"zero shading, zero gradients, zero grayscale, clean vector lineart, simple composition for kids: {character_desc}, {prompt}"
+            f"zero shading, zero gradients, clean vector lineart, simple composition: {character_desc}, {prompt}"
         )
     else:
         full_prompt = (
-            f"{style}, {character_desc}, dynamic composition, {prompt}, "
-            f"highly detailed, vibrant whimsical palette, cinematic depth of field, 8k resolution"
+            f"{style}, {character_desc}, {prompt}, cinematic wide-angle composition, "
+            f"storybook illustration masterpiece, soft volumetric lighting, 8k"
         )
         
     encoded_prompt = urllib.parse.quote(full_prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=800&height=1000&nologo=true&model=turbo"
+    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1000&height=750&seed={seed}&nologo=true&model=turbo"
     
     for _ in range(3):
         try:
@@ -151,15 +175,14 @@ def fetch_image(prompt, style, character_desc, is_coloring=False):
             
     return create_fallback_image("Story Scene" if not is_coloring else "Coloring Sheet")
 
-def generate_word_search_grid(words, size=9):
-    """Generates an actual letter grid with hidden words placed horizontally or vertically."""
+def generate_word_search_grid(words, size=8):
     grid = [[' ' for _ in range(size)] for _ in range(size)]
     placed_words = []
     
     for word in words:
-        clean_word = word.upper().replace(" ", "")[:size]
+        clean_word = clean_pdf_text(word).upper().replace(" ", "")[:size]
         placed = False
-        for _ in range(50):  # 50 placement attempts
+        for _ in range(50):
             direction = random.choice(['H', 'V'])
             if direction == 'H':
                 row = random.randint(0, size - 1)
@@ -180,7 +203,6 @@ def generate_word_search_grid(words, size=9):
                     placed_words.append(clean_word)
                     break
                     
-    # Fill remaining empty spots with random uppercase letters
     for r in range(size):
         for c in range(size):
             if grid[r][c] == ' ':
@@ -189,119 +211,132 @@ def generate_word_search_grid(words, size=9):
     return grid, placed_words
 
 def build_pdf(book_data, story_images, coloring_images, include_acts):
-    pdf = FairyTalePDF(orientation='P', unit='mm', format='A4')
+    pdf = LandscapeStorybookPDF(orientation='L', unit='mm', format='A4')  # 297mm x 210mm
     pdf.set_auto_page_break(auto=False)
     
-    # ---------------- 1. COVER PAGE (FULL BLEED HERO) ----------------
+    title = clean_pdf_text(book_data.get("title", "A Magical Journey"))
+    tagline = clean_pdf_text(book_data.get("tagline", "A Heartwarming Picture Book"))
+    
+    # --- 1. COVER SPREAD ---
     pdf.add_page()
     if story_images:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
             story_images[0].save(tmp.name)
-            cover_img_path = tmp.name
-        # Full page background artwork
-        pdf.image(cover_img_path, x=0, y=0, w=210, h=297)
-        os.remove(cover_img_path)
-    
-    # Elegant Title Ribbon Box on Cover
-    pdf.set_fill_color(255, 252, 245)
-    pdf.set_draw_color(212, 175, 55)  # Gold border
+            cover_img = tmp.name
+        pdf.image(cover_img, x=0, y=0, w=297, h=210)
+        os.remove(cover_img)
+        
+    # Title Ribbon
+    pdf.set_fill_color(255, 253, 248)
+    pdf.set_draw_color(212, 175, 55)
     pdf.set_line_width(1.2)
-    pdf.rect(x=15, y=30, w=180, h=52, style='FD')
+    pdf.rect(x=35, y=35, w=227, h=55, style='FD')
     
-    pdf.set_xy(18, 38)
-    pdf.set_font("Helvetica", "B", 24)
-    pdf.set_text_color(58, 46, 57)
-    pdf.multi_cell(174, 10, book_data.get("title", "A Magical Adventure"), align='C')
+    pdf.set_xy(40, 43)
+    pdf.set_font("Helvetica", "B", 26)
+    pdf.set_text_color(50, 40, 48)
+    pdf.multi_cell(217, 11, title, align='C')
     
-    pdf.set_xy(18, 62)
-    pdf.set_font("Helvetica", "I", 12)
+    pdf.set_xy(40, 72)
+    pdf.set_font("Helvetica", "I", 13)
     pdf.set_text_color(120, 105, 95)
-    pdf.cell(174, 8, book_data.get("tagline", "A Tale of Magic and Wonder"), align='C')
+    pdf.cell(217, 8, tagline, align='C')
 
-    # ---------------- 2. STORY PAGES (FULL-BLEED ART + PARCHMENT TEXT) ----------------
+    # --- 2. STORY SPREADS (Left: Art | Right: Text) ---
     for idx, page in enumerate(book_data.get("pages", [])):
         pdf.add_page()
+        
+        # Left Half: Full-Bleed Artwork
         img = story_images[idx]
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
             img.save(tmp.name)
-            page_img_path = tmp.name
+            page_img = tmp.name
+        pdf.image(page_img, x=0, y=0, w=155, h=210)
+        os.remove(page_img)
         
-        # Illustration covers the upper 72% of the page
-        pdf.image(page_img_path, x=0, y=0, w=210, h=215)
-        os.remove(page_img_path)
+        # Right Half: Warm Parchment Page
+        pdf.set_fill_color(254, 252, 247)
+        pdf.rect(155, 0, 142, 210, style='F')
         
-        # Bottom Parchment Story Card (Zero dead white space)
-        pdf.set_fill_color(255, 253, 248)
-        pdf.set_draw_color(225, 215, 200)
+        # Inner Border
+        pdf.set_draw_color(230, 220, 205)
         pdf.set_line_width(0.8)
-        pdf.rect(x=10, y=200, w=190, h=82, style='FD')
+        pdf.rect(165, 12, 122, 186, style='D')
         
-        # Subtle decorative inner border
-        pdf.set_draw_color(240, 230, 215)
-        pdf.rect(x=13, y=203, w=184, h=76, style='D')
+        # Chapter Indicator
+        pdf.set_xy(170, 24)
+        pdf.set_font("Helvetica", "I", 11)
+        pdf.set_text_color(150, 130, 120)
+        pdf.cell(112, 6, f"~ Chapter {idx + 1} ~", align='C', ln=True)
+        pdf.ln(6)
         
-        # Story narrative text
-        pdf.set_xy(18, 212)
+        # Main Narrative Text
+        story_txt = clean_pdf_text(page.get("story_text", ""))
+        pdf.set_x(172)
         pdf.set_font("Helvetica", "", 13)
         pdf.set_text_color(45, 38, 42)
-        pdf.multi_cell(174, 7.5, page.get("story_text", ""), align='C')
+        pdf.multi_cell(108, 8, story_txt, align='L')
+        
+        # Seek & Find Card
+        seek_txt = clean_pdf_text(page.get("seek_and_find", ""))
+        if seek_txt:
+            pdf.set_xy(170, 148)
+            pdf.set_fill_color(246, 241, 233)
+            pdf.set_draw_color(215, 200, 180)
+            pdf.rect(170, 148, 112, 34, style='FD')
+            
+            pdf.set_xy(174, 152)
+            pdf.set_font("Helvetica", "B", 10.5)
+            pdf.set_text_color(110, 85, 70)
+            pdf.cell(104, 5, "Seek & Find Quest:", ln=True)
+            
+            pdf.set_xy(174, 159)
+            pdf.set_font("Helvetica", "I", 10)
+            pdf.set_text_color(70, 60, 55)
+            pdf.multi_cell(104, 5, seek_txt)
 
-    # ---------------- 3. COLORING STUDIO ----------------
+    # --- 3. COLORING SHEETS ---
     if include_acts and coloring_images:
         for idx, c_img in enumerate(coloring_images):
             pdf.add_page()
-            # Warm paper background
-            pdf.set_fill_color(253, 252, 250)
-            pdf.rect(0, 0, 210, 297, style='F')
+            pdf.set_fill_color(255, 255, 255)
+            pdf.rect(0, 0, 297, 210, style='F')
             
-            # Header
-            pdf.set_xy(10, 16)
-            pdf.set_font("Helvetica", "B", 20)
-            pdf.set_text_color(70, 50, 65)
-            pdf.cell(190, 10, f"🎨 Storybook Coloring Studio — Sheet {idx + 1}", align='C', ln=True)
+            pdf.set_xy(15, 12)
+            pdf.set_font("Helvetica", "B", 18)
+            pdf.set_text_color(60, 45, 55)
+            pdf.cell(267, 8, f"Storybook Coloring Studio - Sheet {idx + 1}", align='C', ln=True)
             
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                 c_img.save(tmp.name)
-                color_img_path = tmp.name
-            
-            # Large, crisp coloring illustration frame
-            pdf.set_draw_color(180, 170, 160)
-            pdf.set_line_width(1.0)
-            pdf.rect(15, 32, 180, 220, style='D')
-            pdf.image(color_img_path, x=16, y=33, w=178, h=218)
-            os.remove(color_img_path)
-            
-            pdf.set_xy(15, 260)
-            pdf.set_font("Helvetica", "I", 11)
-            pdf.set_text_color(120, 110, 100)
-            pdf.cell(180, 8, "Use your favorite crayons or colored pencils to bring this moment to life!", align='C')
+                c_path = tmp.name
+            pdf.image(c_path, x=38, y=26, w=220, h=165)
+            os.remove(c_path)
 
-    # ---------------- 4. INTERACTIVE GAMES SUITE ----------------
+    # --- 4. ACTIVITIES & WORD HUNT ---
     if include_acts:
         pdf.add_page()
-        # Soft parchment backdrop
         pdf.set_fill_color(252, 250, 245)
-        pdf.rect(0, 0, 210, 297, style='F')
+        pdf.rect(0, 0, 297, 210, style='F')
         
-        pdf.set_xy(10, 16)
-        pdf.set_font("Helvetica", "B", 22)
+        pdf.set_xy(15, 12)
+        pdf.set_font("Helvetica", "B", 20)
         pdf.set_text_color(60, 45, 55)
-        pdf.cell(190, 10, "✨ Fairy Tale Games & Quizzes", align='C', ln=True)
-        pdf.ln(4)
+        pdf.cell(267, 8, "Storytime Activities & Word Search", align='C', ln=True)
+        pdf.ln(6)
         
-        # Word Hunt Section with REAL Letter Grid
-        pdf.set_font("Helvetica", "B", 14)
+        # Left Half: Word Search Grid
+        pdf.set_xy(20, 30)
+        pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(80, 60, 70)
-        pdf.set_x(15)
-        pdf.cell(180, 8, "1. Magic Word Hunt (Can you find all the hidden words?)", ln=True)
+        pdf.cell(120, 6, "1. Magic Word Hunt", ln=True)
         
-        words_list = book_data.get("word_search_words", ["STAR", "GLOW", "MAGIC", "BRAVE"])
+        words_list = book_data.get("word_search_words", ["MAGIC", "BRAVE", "GLOW", "STAR"])
         grid, placed_words = generate_word_search_grid(words_list, size=8)
         
-        # Draw Word Search Grid
         start_x = 22
-        start_y = 44
-        cell_size = 8
+        start_y = 42
+        cell_size = 9
         pdf.set_font("Courier", "B", 13)
         pdf.set_draw_color(200, 190, 175)
         
@@ -311,48 +346,49 @@ def build_pdf(book_data, story_images, coloring_images, include_acts):
                 y = start_y + (r_idx * cell_size)
                 pdf.set_fill_color(255, 255, 255)
                 pdf.rect(x, y, cell_size, cell_size, style='FD')
-                pdf.set_xy(x, y + 1.2)
-                pdf.cell(cell_size, cell_size - 1.2, letter, align='C')
+                pdf.set_xy(x, y + 1.5)
+                pdf.cell(cell_size, cell_size - 1.5, letter, align='C')
                 
-        # Word Bank next to the grid
-        pdf.set_xy(100, 46)
+        # Word Bank
+        pdf.set_xy(102, 42)
         pdf.set_font("Helvetica", "B", 11)
         pdf.set_text_color(100, 80, 90)
-        pdf.cell(90, 6, "FIND THESE WORDS:", ln=True)
-        pdf.set_font("Helvetica", "", 11)
+        pdf.cell(45, 6, "WORDS TO FIND:", ln=True)
+        pdf.set_font("Helvetica", "", 10.5)
         for w in placed_words:
-            pdf.set_x(102)
-            pdf.cell(90, 5.5, f"[  ]  {w}", ln=True)
+            pdf.set_x(104)
+            pdf.cell(45, 6, f"[  ]  {w}", ln=True)
             
-        pdf.ln(18)
-        
-        # Story Quiz Section
-        pdf.set_font("Helvetica", "B", 14)
+        # Right Half: Quiz
+        pdf.set_xy(160, 30)
+        pdf.set_font("Helvetica", "B", 13)
         pdf.set_text_color(80, 60, 70)
-        pdf.set_x(15)
-        pdf.cell(180, 8, "2. Story Detective Quiz", ln=True)
+        pdf.cell(120, 6, "2. Reading Comprehension Quiz", ln=True)
         
+        pdf.set_xy(160, 42)
         for q_idx, q in enumerate(book_data.get("trivia", [])):
-            pdf.set_x(18)
+            q_text = clean_pdf_text(q.get('question', ''))
+            pdf.set_x(162)
             pdf.set_font("Helvetica", "B", 11)
             pdf.set_text_color(50, 40, 45)
-            pdf.multi_cell(174, 6, f"Q{q_idx + 1}: {q.get('question')}")
+            pdf.multi_cell(115, 6, f"Q{q_idx + 1}: {q_text}")
             pdf.set_font("Helvetica", "", 10.5)
             for opt in q.get("options", []):
-                pdf.set_x(24)
-                pdf.cell(168, 5.2, f"(   )  {opt}", ln=True)
+                opt_text = clean_pdf_text(opt)
+                pdf.set_x(168)
+                pdf.cell(110, 5.5, f"(   )  {opt_text}", ln=True)
             pdf.ln(3)
 
     return bytes(pdf.output())
 
-# --- Generation Execution Flow ---
-if st.button("🌟 Generate Full Illustrated Book", type="primary"):
+# --- Execution Workflow ---
+if st.button("🌟 Generate Full Picture Book Experience", type="primary"):
     if not gemini_key:
-        st.error("Please add your Gemini API Key in the sidebar.")
+        st.error("Please enter your Gemini API Key in the sidebar.")
     elif not story_prompt.strip():
         st.error("Please describe your story idea.")
     else:
-        with st.spinner(f"Writing {pages_count}-page enchanted tale with dynamic scene actions..."):
+        with st.spinner(f"Writing {pages_count}-spread story with seek-and-find quests..."):
             try:
                 book = generate_full_tale(gemini_key, story_prompt, pages_count)
             except Exception as e:
@@ -361,40 +397,53 @@ if st.button("🌟 Generate Full Illustrated Book", type="primary"):
 
         st.success(f"✨ Created: **{book.get('title')}** — *{book.get('tagline')}*")
         
-        # Character & Scene Visuals in Parallel
+        # 1. Lock a random seed across all story illustrations for character continuity
+        shared_seed = random.randint(100000, 999999)
         pages_list = book.get("pages", [])
         char_desc = book.get("character_description", "")
         
-        with st.spinner(f"Painting {len(pages_list)} rich fairytale illustrations..."):
+        with st.spinner(f"Painting {len(pages_list)} landscape illustrations (Seed: {shared_seed})..."):
             with ThreadPoolExecutor(max_workers=4) as executor:
                 story_images = list(executor.map(
-                    lambda p: fetch_image(p.get("action_image_prompt"), art_style, char_desc),
+                    lambda p: fetch_image(p.get("action_image_prompt"), art_style, char_desc, shared_seed),
                     pages_list
                 ))
 
-        # Real Line Art Coloring Sheets in Parallel
+        # 2. Render Coloring Sheets
         coloring_images = []
         if include_activities:
             c_prompts = book.get("coloring_prompts", [])[:2]
             with st.spinner("Generating crisp line-art coloring pages..."):
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     coloring_images = list(executor.map(
-                        lambda cp: fetch_image(cp, art_style, char_desc, is_coloring=True),
+                        lambda cp: fetch_image(cp, art_style, char_desc, shared_seed, is_coloring=True),
                         c_prompts
                     ))
 
-        # Live Web Experience
-        tab1, tab2, tab3 = st.tabs(["📖 Story Showcase", "🖍️ Coloring Studio", "🧩 Games & Quizzes"])
+        # 3. Generate Neural Voice Audio Files (Async Edge-TTS)
+        audio_files = []
+        if enable_audio:
+            with st.spinner("Generating neural bedtime story narration..."):
+                for idx, p in enumerate(pages_list):
+                    tmp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                    asyncio.run(generate_narration_audio(p.get("story_text"), tmp_audio.name))
+                    audio_files.append(tmp_audio.name)
+
+        # 4. Interactive Live Preview
+        tab1, tab2, tab3 = st.tabs(["📖 Storybook Experience", "🖍️ Coloring Studio", "🧩 Games & Quizzes"])
         
         with tab1:
-            for idx, p in enumerate(book.get("pages", [])):
-                col1, col2 = st.columns([3, 2])
-                with col1:
+            for idx, p in enumerate(pages_list):
+                st.markdown(f"#### Spread {idx + 1}")
+                col_left, col_right = st.columns([1.2, 1])
+                with col_left:
                     st.image(story_images[idx], use_container_width=True)
-                with col2:
-                    st.markdown(f"### Page {idx + 1}")
-                    st.markdown(f"*{p.get('story_text')}*")
-                    st.caption(f"**Action:** {p.get('action_image_prompt')}")
+                with col_right:
+                    st.markdown(f"### Chapter {idx + 1}")
+                    st.write(p.get("story_text"))
+                    st.info(f"🔍 **Seek & Find:** {p.get('seek_and_find')}")
+                    if enable_audio and idx < len(audio_files):
+                        st.audio(audio_files[idx], format="audio/mp3")
                 st.divider()
                 
         with tab2:
@@ -403,9 +452,7 @@ if st.button("🌟 Generate Full Illustrated Book", type="primary"):
                 for c_idx, c_pic in enumerate(coloring_images):
                     with c_cols[c_idx]:
                         st.image(c_pic, caption=f"Coloring Sheet {c_idx + 1}", use_container_width=True)
-            else:
-                st.info("Coloring sheets disabled.")
-                
+                        
         with tab3:
             if include_activities:
                 col_a, col_b = st.columns(2)
@@ -417,16 +464,14 @@ if st.button("🌟 Generate Full Illustrated Book", type="primary"):
                     for q in book.get("trivia", []):
                         st.write(f"**{q.get('question')}**")
                         st.write("Options:", ", ".join(q.get("options", [])))
-            else:
-                st.info("Activities disabled.")
 
-        # PDF Compilation
-        with st.spinner("Assembling print-ready A4 picture book..."):
+        # 5. Compile PDF
+        with st.spinner("Compiling landscape 2-page spread PDF..."):
             pdf_bytes = build_pdf(book, story_images, coloring_images, include_activities)
             
         st.download_button(
-            label="📥 Download Complete Illustrated PDF Book",
+            label="📥 Download Landscape Deluxe PDF Book",
             data=pdf_bytes,
-            file_name=f"{book.get('title', 'fairytale').replace(' ', '_').lower()}.pdf",
+            file_name=f"{clean_pdf_text(book.get('title', 'fairytale')).replace(' ', '_').lower()}_deluxe.pdf",
             mime="application/pdf"
         )
