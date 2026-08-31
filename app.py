@@ -86,12 +86,10 @@ def generate_book_and_activities(api_key, user_prompt, num_pages):
     }}
     """
     
-    # Candidate models to cycle through if a 503 (high demand) or 404 occurs
+    # Active current-generation model endpoints
     candidate_models = [
-        'gemini-2.5-flash',
-        'gemini-2.0-flash',
-        'gemini-1.5-flash',
-        'gemini-2.5-pro'
+        'gemini-3.6-flash',
+        'gemini-3.1-pro-preview'
     ]
     
     last_error = None
@@ -109,7 +107,7 @@ def generate_book_and_activities(api_key, user_prompt, num_pages):
                 return json.loads(response.text)
             except Exception as e:
                 last_error = e
-                time.sleep(2)  # Pause before retry or switching model
+                time.sleep(2)
                 continue
                 
     raise last_error
@@ -123,7 +121,6 @@ def fetch_image(prompt, style, character_desc, is_coloring=False):
     encoded_prompt = urllib.parse.quote(full_prompt)
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=600&height=600&nologo=true&model=turbo"
     
-    # Retry up to 3 times to mitigate read timeouts under load
     for attempt in range(3):
         try:
             res = requests.get(url, timeout=30)
